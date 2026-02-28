@@ -1,0 +1,8 @@
+config.yaml
+compose.yaml
+
+data/
+*.seen
+
+ref/
+.claude/

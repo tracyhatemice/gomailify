@@ -1,0 +1,38 @@
+# gomailify - lightweight email forwarder
+# Copy this file to config.yaml and edit with your settings.
+
+# Log level: debug, info, warn, error
+log_level: info
+
+# SMTP sender (outgoing mail server used to forward emails)
+sender:
+  host: smtp.gmail.com
+  port: 465
+  username: your-sender@gmail.com
+  password: your-app-password
+  use_tls: true
+
+# Email accounts to monitor
+accounts:
+  - name: work-pop3
+    protocol: pop3
+    host: pop.example.com
+    port: 995
+    username: user@example.com
+    password: app-password
+    use_tls: true
+    forward_to: destination@gmail.com
+    check_interval_seconds: 300
+    process_days: 7
+
+  - name: personal-imap
+    protocol: imap
+    host: imap.example.com
+    port: 993
+    username: user@example.com
+    password: app-password
+    use_tls: true
+    forward_to: destination@gmail.com
+    check_interval_seconds: 120
+    process_days: 7
+    imap_folder: INBOX

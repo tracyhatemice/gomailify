@@ -1,0 +1,10 @@
+.claude/
+.github/
+ref/
+data/
+*.seen
+*.yaml
+.git/
+.gitignore
+README.md
+LICENSE
