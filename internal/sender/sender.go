@@ -1,11 +1,14 @@
 package sender
 
 import (
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
+	netmail "net/mail"
 	"net/smtp"
+	"regexp"
 	"strings"
 	"time"
 
@@ -47,6 +50,9 @@ func (s *Sender) Forward(rawEmail []byte, to string, originalID string) error {
 			from = addrs[0].Address
 		}
 	}
+
+	// Rewrite From header to append "via Gomailify".
+	rawEmail = rewriteFrom(rawEmail)
 
 	// Prepend forwarding headers to the raw email.
 	forwardHeaders := fmt.Sprintf(
@@ -111,4 +117,50 @@ func (s *Sender) Forward(rawEmail []byte, to string, originalID string) error {
 	}
 
 	return client.Quit()
+}
+
+// fromRe matches the From header line within the header section (handles folded headers).
+var fromRe = regexp.MustCompile(`(?mi)^From:\s*(.+(?:\r?\n[ \t]+.*)*)`)
+
+// rewriteFrom modifies the From header display name to append "via Gomailify".
+// e.g. "Alice <a@b.com>" becomes "Alice via Gomailify <a@b.com>"
+func rewriteFrom(raw []byte) []byte {
+	// Find the header/body boundary (RFC 5322: first blank line).
+	headerEnd := bytes.Index(raw, []byte("\r\n\r\n"))
+	if headerEnd == -1 {
+		headerEnd = bytes.Index(raw, []byte("\n\n"))
+	}
+	if headerEnd == -1 {
+		headerEnd = len(raw)
+	}
+	headers := raw[:headerEnd]
+
+	loc := fromRe.FindIndex(headers)
+	if loc == nil {
+		return raw
+	}
+
+	// Extract the value after "From:" (5 bytes, case-insensitive but same length).
+	addrPart := strings.TrimSpace(string(headers[loc[0]+len("From:") : loc[1]]))
+
+	addr, err := netmail.ParseAddress(addrPart)
+	if err != nil {
+		return raw
+	}
+
+	name := addr.Name
+	if name == "" {
+		name = addr.Address
+	}
+	if !strings.HasSuffix(name, "via Gomailify") {
+		name += " via Gomailify"
+	}
+
+	newFrom := fmt.Sprintf("From: %s", (&netmail.Address{Name: name, Address: addr.Address}).String())
+
+	var buf bytes.Buffer
+	buf.Write(raw[:loc[0]])
+	buf.WriteString(newFrom)
+	buf.Write(raw[loc[1]:])
+	return buf.Bytes()
 }
