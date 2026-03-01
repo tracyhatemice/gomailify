@@ -33,14 +33,19 @@ Or with Docker Compose — create a `compose.yaml`:
 ```yaml
 services:
   gomailify:
-    image: ghcr.io/tracyhatemice/gomailify
+    image: ghcr.io/tracyhatemice/gomailify:main
+    container_name: gomailify
     restart: unless-stopped
+    network_mode: bridge
+    environment:
+      TZ: "UTC"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - gomailify-data:/app/data
 
 volumes:
   gomailify-data:
+    name: gomailify
 ```
 
 ```bash

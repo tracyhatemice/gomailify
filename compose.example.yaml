@@ -1,8 +1,9 @@
 services:
   gomailify:
-    image: ghcr.io/tracyhatemice/gomailify:latest
-    build: .
+    image: ghcr.io/tracyhatemice/gomailify:main
+    container_name: gomailify
     restart: unless-stopped
+    network_mode: bridge
     environment:
       TZ: "UTC"
     volumes:
@@ -11,3 +12,4 @@ services:
 
 volumes:
   gomailify-data:
+    name: gomailify

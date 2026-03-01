@@ -71,6 +71,16 @@ func main() {
 
 	<-ctx.Done()
 	logger.Info("shutting down, waiting for forwarders to finish...")
+
+	// Force exit on second signal.
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		<-sig
+		logger.Warn("forced shutdown")
+		os.Exit(1)
+	}()
+
 	wg.Wait()
 	logger.Info("gomailify stopped")
 }
