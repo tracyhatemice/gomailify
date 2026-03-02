@@ -1,3 +1,5 @@
+[![Build Container Image](https://github.com/tracyhatemice/gomailify/actions/workflows/docker.yml/badge.svg?branch=main)](https://github.com/tracyhatemice/gomailify/actions/workflows/docker.yml)
+
 # gomailify
 
 A lightweight email forwarder that monitors POP3/IMAP accounts and forwards new emails to a destination address via SMTP. Designed as a self-hosted replacement for Gmail's "Check mail from other accounts" (POP) feature.
