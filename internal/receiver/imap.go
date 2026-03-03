@@ -54,8 +54,12 @@ func (r *IMAPReceiver) Fetch(seenIDs map[string]struct{}, processDays int) ([]Em
 	if err != nil {
 		return nil, err
 	}
-	defer client.Logout()
-	defer client.Close()
+	defer func() {
+		if err := client.Logout().Wait(); err != nil {
+			r.logger.Debug("imap logout", "account", r.name, "error", err)
+		}
+		client.Close()
+	}()
 
 	if _, err := client.Select(r.folder, nil).Wait(); err != nil {
 		return nil, fmt.Errorf("imap select %s: %w", r.folder, err)
@@ -109,8 +113,13 @@ func (r *IMAPReceiver) runSession(ctx context.Context, getSeenIDs func() map[str
 	if err != nil {
 		return err
 	}
-	defer client.Logout()
-	defer client.Close()
+	defer func() {
+		r.logger.Debug("imap disconnecting", "account", r.name)
+		if err := client.Logout().Wait(); err != nil {
+			r.logger.Debug("imap logout", "account", r.name, "error", err)
+		}
+		client.Close()
+	}()
 
 	if _, err := client.Select(r.folder, nil).Wait(); err != nil {
 		return fmt.Errorf("imap select %s: %w", r.folder, err)
