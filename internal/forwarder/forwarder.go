@@ -2,7 +2,6 @@ package forwarder
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -12,7 +11,7 @@ import (
 	"github.com/tracyhatemice/gomailify/internal/sender"
 )
 
-const maxBackoffMultiplier = 16
+const maxBackoffShift = 4 // multiplier caps at 1<<4 = 16×
 
 // Forwarder monitors one email account and forwards new messages.
 type Forwarder struct {
@@ -51,9 +50,7 @@ func (f *Forwarder) Run(ctx context.Context) {
 	)
 
 	if w, ok := f.receiver.(receiver.Watcher); ok {
-		w.Watch(ctx, f.tracker.SeenIDs, f.account.GetProcessDays(), func(emails []receiver.Email) {
-			f.forwardEmails(emails)
-		})
+		w.Watch(ctx, f.tracker.SeenIDs, f.account.GetProcessDays(), f.forwardEmails)
 	} else {
 		f.runPoller(ctx)
 	}
@@ -67,48 +64,44 @@ func (f *Forwarder) runPoller(ctx context.Context) {
 	f.logger.Info("using polling", "account", f.account.Name, "interval", base)
 
 	errCount := 0
-	if !f.poll() {
-		errCount++
-	}
-
 	for {
-		wait := backoff(base, errCount)
+		if err := f.poll(); err != nil {
+			f.logger.Error("fetch failed", "account", f.account.Name, "error", err)
+			errCount++
+			f.logger.Warn("backing off",
+				"account", f.account.Name,
+				"consecutive_errors", errCount,
+				"next_wait", backoff(base, errCount),
+			)
+		} else {
+			errCount = 0
+		}
+
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(wait):
-			if f.poll() {
-				errCount = 0
-			} else {
-				errCount++
-				f.logger.Warn("backing off",
-					"account", f.account.Name,
-					"consecutive_errors", errCount,
-					"next_retry", backoff(base, errCount),
-				)
-			}
+		case <-time.After(backoff(base, errCount)):
 		}
 	}
 }
 
-// poll fetches and forwards new emails. Returns true on success, false on fetch error.
-func (f *Forwarder) poll() bool {
+// poll fetches and forwards new emails. Returns an error on fetch failure.
+func (f *Forwarder) poll() error {
 	f.logger.Debug("polling", "account", f.account.Name)
 	emails, err := f.receiver.Fetch(f.tracker.SeenIDs(), f.account.GetProcessDays())
 	if err != nil {
-		f.logger.Error("fetch failed", "account", f.account.Name, "error", err)
-		return false
+		return err
 	}
 	if len(emails) > 0 {
 		f.forwardEmails(emails)
 	} else {
 		f.logger.Debug("no new emails", "account", f.account.Name)
 	}
-	return true
+	return nil
 }
 
 func (f *Forwarder) forwardEmails(emails []receiver.Email) {
-	f.logger.Info(fmt.Sprintf("found %d new email(s)", len(emails)), "account", f.account.Name)
+	f.logger.Info("forwarding new emails", "account", f.account.Name, "count", len(emails))
 	for _, email := range emails {
 		if err := f.sender.Forward(email.Content, f.account.ForwardTo, email.ID); err != nil {
 			f.logger.Error("forward failed",
@@ -134,11 +127,10 @@ func (f *Forwarder) forwardEmails(emails []receiver.Email) {
 	}
 }
 
-// backoff returns base * 2^errCount, capped at base * maxBackoffMultiplier.
+// backoff returns base * 2^errCount, capped at base * (1 << maxBackoffShift).
 func backoff(base time.Duration, errCount int) time.Duration {
 	if errCount <= 0 {
 		return base
 	}
-	multiplier := 1 << min(errCount, 4) // 2× → 4× → 8× → 16×
-	return base * time.Duration(multiplier)
+	return base * (1 << min(errCount, maxBackoffShift))
 }
