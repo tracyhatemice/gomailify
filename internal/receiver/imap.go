@@ -50,16 +50,11 @@ func NewIMAP(name, host string, port int, username, password string, useTLS bool
 
 // Fetch opens a one-shot connection, retrieves new emails, and closes.
 func (r *IMAPReceiver) Fetch(seenIDs map[string]struct{}, processDays int) ([]Email, error) {
-	client, err := r.connect()
+	client, err := r.dial(nil)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err := client.Logout().Wait(); err != nil {
-			r.logger.Debug("imap logout", "account", r.name, "error", err)
-		}
-		client.Close()
-	}()
+	defer r.logout(client)
 
 	if _, err := client.Select(r.folder, nil).Wait(); err != nil {
 		return nil, fmt.Errorf("imap select %s: %w", r.folder, err)
@@ -72,33 +67,32 @@ func (r *IMAPReceiver) Fetch(seenIDs map[string]struct{}, processDays int) ([]Em
 // supports it (advertised in capabilities) and falling back to timed polling
 // on the same connection otherwise. Reconnects with exponential backoff.
 func (r *IMAPReceiver) Watch(ctx context.Context, getSeenIDs func() map[string]struct{}, processDays int, onNew func([]Email)) {
-	backoffDur := imapInitialBackoff
+	backoff := imapInitialBackoff
 	for {
-		r.logger.Debug("imap connecting", "account", r.name)
-		err := r.runSession(ctx, getSeenIDs, processDays, onNew)
-		if ctx.Err() != nil {
+		if err := r.runSession(ctx, getSeenIDs, processDays, onNew); ctx.Err() != nil {
 			return
+		} else {
+			r.logger.Error("imap session ended, reconnecting",
+				"account", r.name,
+				"error", err,
+				"backoff", backoff,
+			)
 		}
-		r.logger.Error("imap session ended, reconnecting",
-			"account", r.name,
-			"error", err,
-			"backoff", backoffDur,
-		)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoffDur):
+		case <-time.After(backoff):
 		}
-		backoffDur = min(backoffDur*2, imapMaxBackoff)
+		backoff = min(backoff*2, imapMaxBackoff)
 	}
 }
 
-// runSession connects, does an initial fetch, then dispatches to the IDLE loop
-// or the polling loop depending on server capabilities.
+// runSession connects, selects the folder, performs an initial fetch, then
+// dispatches to idleLoop or pollLoop based on server capabilities.
 func (r *IMAPReceiver) runSession(ctx context.Context, getSeenIDs func() map[string]struct{}, processDays int, onNew func([]Email)) error {
 	notify := make(chan struct{}, 1)
 
-	opts := r.clientOptions(&imapclient.UnilateralDataHandler{
+	client, err := r.dial(&imapclient.UnilateralDataHandler{
 		Mailbox: func(data *imapclient.UnilateralDataMailbox) {
 			if data.NumMessages != nil {
 				select {
@@ -108,20 +102,13 @@ func (r *IMAPReceiver) runSession(ctx context.Context, getSeenIDs func() map[str
 			}
 		},
 	})
-
-	client, err := r.connectWithOptions(opts)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		r.logger.Debug("imap disconnecting", "account", r.name)
-		if err := client.Logout().Wait(); err != nil {
-			r.logger.Debug("imap logout", "account", r.name, "error", err)
-		}
-		client.Close()
-	}()
+	defer r.logout(client)
 
-	if client.Caps().Has(imap.CapIdle) {
+	caps := client.Caps()
+	if caps.Has(imap.CapIdle) {
 		r.logger.Info("using IMAP IDLE", "account", r.name)
 	} else {
 		r.logger.Info("using polling", "account", r.name, "interval", r.pollInterval)
@@ -134,14 +121,14 @@ func (r *IMAPReceiver) runSession(ctx context.Context, getSeenIDs func() map[str
 	// Initial fetch on connect.
 	r.deliverNew(client, getSeenIDs(), processDays, onNew)
 
-	if client.Caps().Has(imap.CapIdle) {
-		return r.runIDLELoop(ctx, client, notify, getSeenIDs, processDays, onNew)
+	if caps.Has(imap.CapIdle) {
+		return r.idleLoop(ctx, client, notify, getSeenIDs, processDays, onNew)
 	}
-	return r.runPollingLoop(ctx, client, getSeenIDs, processDays, onNew)
+	return r.pollLoop(ctx, client, getSeenIDs, processDays, onNew)
 }
 
-// runIDLELoop blocks in IDLE, waking on server notifications to fetch new mail.
-func (r *IMAPReceiver) runIDLELoop(ctx context.Context, client *imapclient.Client, notify <-chan struct{}, getSeenIDs func() map[string]struct{}, processDays int, onNew func([]Email)) error {
+// idleLoop blocks in IDLE, waking on server notifications to fetch new mail.
+func (r *IMAPReceiver) idleLoop(ctx context.Context, client *imapclient.Client, notify <-chan struct{}, getSeenIDs func() map[string]struct{}, processDays int, onNew func([]Email)) error {
 	idleCmd, err := client.Idle()
 	if err != nil {
 		return fmt.Errorf("imap idle: %w", err)
@@ -158,7 +145,7 @@ func (r *IMAPReceiver) runIDLELoop(ctx context.Context, client *imapclient.Clien
 			return nil
 
 		case err := <-idleDone:
-			return fmt.Errorf("imap idle ended: %w", err)
+			return fmt.Errorf("imap idle ended unexpectedly: %w", err)
 
 		case <-notify:
 			if err := idleCmd.Close(); err != nil {
@@ -169,16 +156,15 @@ func (r *IMAPReceiver) runIDLELoop(ctx context.Context, client *imapclient.Clien
 			}
 			r.deliverNew(client, getSeenIDs(), processDays, onNew)
 
-			idleCmd, err = client.Idle()
-			if err != nil {
+			if idleCmd, err = client.Idle(); err != nil {
 				return fmt.Errorf("imap idle restart: %w", err)
 			}
 		}
 	}
 }
 
-// runPollingLoop polls on r.pollInterval using the existing connection.
-func (r *IMAPReceiver) runPollingLoop(ctx context.Context, client *imapclient.Client, getSeenIDs func() map[string]struct{}, processDays int, onNew func([]Email)) error {
+// pollLoop polls on r.pollInterval using the existing connection.
+func (r *IMAPReceiver) pollLoop(ctx context.Context, client *imapclient.Client, getSeenIDs func() map[string]struct{}, processDays int, onNew func([]Email)) error {
 	ticker := time.NewTicker(r.pollInterval)
 	defer ticker.Stop()
 	for {
@@ -203,52 +189,54 @@ func (r *IMAPReceiver) deliverNew(client *imapclient.Client, seenIDs map[string]
 }
 
 // fetchMessages searches for and retrieves new emails on an already-selected client.
+// It uses UID-based search and fetch for stable message identification.
 func (r *IMAPReceiver) fetchMessages(client *imapclient.Client, seenIDs map[string]struct{}, processDays int) ([]Email, error) {
 	since := time.Now().AddDate(0, 0, -processDays)
-	searchData, err := client.Search(&imap.SearchCriteria{Since: since}, nil).Wait()
+	searchData, err := client.UIDSearch(&imap.SearchCriteria{Since: since}, nil).Wait()
 	if err != nil {
 		return nil, fmt.Errorf("imap search: %w", err)
 	}
 
-	seqNums := searchData.AllSeqNums()
-	if len(seqNums) == 0 {
+	uids := searchData.AllUIDs()
+	if len(uids) == 0 {
 		r.logger.Debug("no messages found in date range", "account", r.name)
 		return nil, nil
 	}
-	r.logger.Info("found messages in date range", "account", r.name, "count", len(seqNums))
+	r.logger.Info("found messages in date range", "account", r.name, "count", len(uids))
 
 	fetchOpts := &imap.FetchOptions{
+		UID:         true,
 		Envelope:    true,
 		BodySection: []*imap.FetchItemBodySection{{Peek: true}},
 	}
-	buffers, err := client.Fetch(imap.SeqSetNum(seqNums...), fetchOpts).Collect()
+	msgs, err := client.Fetch(imap.UIDSetNum(uids...), fetchOpts).Collect()
 	if err != nil {
 		return nil, fmt.Errorf("imap fetch: %w", err)
 	}
 
 	bodySection := &imap.FetchItemBodySection{Peek: true}
 	var emails []Email
-	for _, buf := range buffers {
-		var msgID string
-		if buf.Envelope != nil {
-			msgID = buf.Envelope.MessageID
+	for _, msg := range msgs {
+		msgID := ""
+		if msg.Envelope != nil {
+			msgID = msg.Envelope.MessageID
 		}
 		if msgID == "" {
-			msgID = fmt.Sprintf("imap-%d-%s", buf.SeqNum, r.username)
+			msgID = fmt.Sprintf("imap-uid-%d-%s", msg.UID, r.username)
 		}
 		if _, seen := seenIDs[msgID]; seen {
 			continue
 		}
 
-		content := buf.FindBodySection(bodySection)
+		content := msg.FindBodySection(bodySection)
 		if len(content) == 0 {
 			r.logger.Warn("empty body, skipping", "account", r.name, "msg_id", msgID)
 			continue
 		}
 
 		var date time.Time
-		if buf.Envelope != nil {
-			date = buf.Envelope.Date
+		if msg.Envelope != nil {
+			date = msg.Envelope.Date
 		}
 		emails = append(emails, Email{ID: msgID, Date: date, Content: content})
 	}
@@ -257,12 +245,15 @@ func (r *IMAPReceiver) fetchMessages(client *imapclient.Client, seenIDs map[stri
 	return emails, nil
 }
 
-func (r *IMAPReceiver) connect() (*imapclient.Client, error) {
-	return r.connectWithOptions(r.clientOptions(nil))
-}
-
-func (r *IMAPReceiver) connectWithOptions(opts *imapclient.Options) (*imapclient.Client, error) {
+// dial creates an authenticated IMAP connection.
+// handler may be nil for one-shot (non-Watch) connections.
+func (r *IMAPReceiver) dial(handler *imapclient.UnilateralDataHandler) (*imapclient.Client, error) {
 	addr := net.JoinHostPort(r.host, fmt.Sprintf("%d", r.port))
+	opts := &imapclient.Options{
+		TLSConfig:             &tls.Config{ServerName: r.host},
+		UnilateralDataHandler: handler,
+	}
+
 	var (
 		client *imapclient.Client
 		err    error
@@ -282,11 +273,12 @@ func (r *IMAPReceiver) connectWithOptions(opts *imapclient.Options) (*imapclient
 	return client, nil
 }
 
-func (r *IMAPReceiver) clientOptions(handler *imapclient.UnilateralDataHandler) *imapclient.Options {
-	return &imapclient.Options{
-		TLSConfig:             &tls.Config{ServerName: r.host},
-		UnilateralDataHandler: handler,
+// logout cleanly signs off and closes the connection.
+func (r *IMAPReceiver) logout(client *imapclient.Client) {
+	if err := client.Logout().Wait(); err != nil {
+		r.logger.Debug("imap logout", "account", r.name, "error", err)
 	}
+	client.Close()
 }
 
 func (r *IMAPReceiver) Close() error {
