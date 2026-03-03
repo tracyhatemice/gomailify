@@ -13,6 +13,7 @@ import (
 
 // POP3Receiver fetches emails over POP3/POP3S.
 type POP3Receiver struct {
+	name     string
 	host     string
 	port     int
 	username string
@@ -22,8 +23,9 @@ type POP3Receiver struct {
 }
 
 // NewPOP3 creates a new POP3 receiver.
-func NewPOP3(host string, port int, username, password string, useTLS bool, logger *slog.Logger) *POP3Receiver {
+func NewPOP3(name, host string, port int, username, password string, useTLS bool, logger *slog.Logger) *POP3Receiver {
 	return &POP3Receiver{
+		name:     name,
 		host:     host,
 		port:     port,
 		username: username,
@@ -58,7 +60,7 @@ func (r *POP3Receiver) Fetch(seenIDs map[string]struct{}, processDays int) ([]Em
 		return nil, fmt.Errorf("pop3 list: %w", err)
 	}
 
-	r.logger.Info("fetched message list", "count", len(msgs))
+	r.logger.Info("fetched message list", "account", r.name, "count", len(msgs))
 
 	cutoff := time.Now().AddDate(0, 0, -processDays)
 	var emails []Email
@@ -97,7 +99,7 @@ func (r *POP3Receiver) Fetch(seenIDs map[string]struct{}, processDays int) ([]Em
 		})
 	}
 
-	r.logger.Info("filtered emails", "new", len(emails))
+	r.logger.Info("filtered emails", "account", r.name, "new", len(emails))
 	return emails, nil
 }
 
