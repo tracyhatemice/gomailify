@@ -124,7 +124,8 @@ func (r *IMAPReceiver) runSession(ctx context.Context, getSeenIDs func() map[str
 	if caps.Has(imap.CapIdle) {
 		return r.idleLoop(ctx, client, notify, getSeenIDs, processDays, onNew)
 	}
-	return r.pollLoop(ctx, client, getSeenIDs, processDays, onNew)
+	r.pollLoop(ctx, getSeenIDs, processDays, onNew)
+	return nil
 }
 
 // idleLoop blocks in IDLE, waking on server notifications to fetch new mail.
@@ -163,16 +164,25 @@ func (r *IMAPReceiver) idleLoop(ctx context.Context, client *imapclient.Client, 
 	}
 }
 
-// pollLoop polls on r.pollInterval using the existing connection.
-func (r *IMAPReceiver) pollLoop(ctx context.Context, client *imapclient.Client, getSeenIDs func() map[string]struct{}, processDays int, onNew func([]Email)) error {
+// pollLoop polls on r.pollInterval, opening a fresh connection for each tick.
+// A fresh connection per tick avoids server-side idle-timeout errors that occur
+// when a persistent connection sits unused for the full poll interval.
+func (r *IMAPReceiver) pollLoop(ctx context.Context, getSeenIDs func() map[string]struct{}, processDays int, onNew func([]Email)) {
 	ticker := time.NewTicker(r.pollInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-ticker.C:
-			r.deliverNew(client, getSeenIDs(), processDays, onNew)
+			emails, err := r.Fetch(getSeenIDs(), processDays)
+			if err != nil {
+				r.logger.Error("imap fetch failed", "account", r.name, "error", err)
+				continue
+			}
+			if len(emails) > 0 {
+				onNew(emails)
+			}
 		}
 	}
 }
