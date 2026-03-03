@@ -97,7 +97,7 @@ func newReceiver(acct config.Account, logger *slog.Logger) (receiver.Receiver, e
 		return receiver.NewIMAP(
 			acct.Host, acct.Port,
 			acct.Username, acct.Password,
-			acct.UseTLS, acct.GetIMAPFolder(), logger,
+			acct.UseTLS, acct.GetIMAPFolder(), acct.CheckInterval(), logger,
 		), nil
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", acct.Protocol)
