@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	imapInitialBackoff = 5 * time.Second
-	imapMaxBackoff     = 10 * time.Minute
+	imapInitialBackoff = 30 * time.Minute
+	imapMaxBackoff     = 60 * time.Minute
 )
 
 // IMAPReceiver fetches emails over IMAP/IMAPS and implements Watcher via IDLE.

@@ -7,6 +7,7 @@ A lightweight email forwarder that monitors POP3/IMAP accounts and forwards new 
 ## Features
 
 - **POP3 and IMAP** support with TLS/SSL
+- **IMAP idle/push** support for near-instant forwarding
 - **Multiple accounts** — monitor any number of source mailboxes concurrently
 - **Configurable check interval** per account (in seconds)
 - **Configurable process window** — only forward emails from the last N days
