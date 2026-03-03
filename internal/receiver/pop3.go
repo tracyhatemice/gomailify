@@ -1,13 +1,13 @@
 package receiver
 
 import (
+	"bytes"
 	"fmt"
 	"log/slog"
 	"net"
-	"strings"
+	netmail "net/mail"
 	"time"
 
-	"github.com/emersion/go-message/mail"
 	pop3client "github.com/knadh/go-pop3"
 )
 
@@ -107,24 +107,22 @@ func (r *POP3Receiver) Close() error {
 	return nil
 }
 
-// extractMessageID parses Message-ID from raw email bytes.
+// extractMessageID extracts the Message-ID header from raw email bytes.
 func extractMessageID(raw []byte) string {
-	reader, err := mail.CreateReader(strings.NewReader(string(raw)))
+	msg, err := netmail.ReadMessage(bytes.NewReader(raw))
 	if err != nil {
 		return ""
 	}
-	defer reader.Close()
-	return reader.Header.Get("Message-ID")
+	return msg.Header.Get("Message-ID")
 }
 
 // extractDate parses the Date header from raw email bytes.
 func extractDate(raw []byte) time.Time {
-	reader, err := mail.CreateReader(strings.NewReader(string(raw)))
+	msg, err := netmail.ReadMessage(bytes.NewReader(raw))
 	if err != nil {
 		return time.Time{}
 	}
-	defer reader.Close()
-	date, err := reader.Header.Date()
+	date, err := msg.Header.Date()
 	if err != nil {
 		return time.Time{}
 	}
