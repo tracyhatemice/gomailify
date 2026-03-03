@@ -37,6 +37,7 @@ type Account struct {
 	CheckIntervalSeconds int    `yaml:"check_interval_seconds"`
 	ProcessDays          int    `yaml:"process_days"`
 	IMAPFolder           string `yaml:"imap_folder"`
+	UseIdle              *bool  `yaml:"use_idle"` // IMAP only; defaults to true
 }
 
 // CheckInterval returns the check interval as a time.Duration.
@@ -53,6 +54,14 @@ func (a *Account) GetProcessDays() int {
 		return 7
 	}
 	return a.ProcessDays
+}
+
+// GetUseIdle returns whether IMAP IDLE should be used, defaulting to true.
+func (a *Account) GetUseIdle() bool {
+	if a.UseIdle == nil {
+		return true
+	}
+	return *a.UseIdle
 }
 
 // GetIMAPFolder returns the IMAP folder name, defaulting to "INBOX".

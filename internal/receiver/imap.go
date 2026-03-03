@@ -27,11 +27,12 @@ type IMAPReceiver struct {
 	useTLS       bool
 	folder       string
 	pollInterval time.Duration // fallback interval when IDLE is unsupported
+	useIdle      bool          // if false, polling is used even when server supports IDLE
 	logger       *slog.Logger
 }
 
 // NewIMAP creates a new IMAP receiver.
-func NewIMAP(name, host string, port int, username, password string, useTLS bool, folder string, pollInterval time.Duration, logger *slog.Logger) *IMAPReceiver {
+func NewIMAP(name, host string, port int, username, password string, useTLS bool, folder string, pollInterval time.Duration, useIdle bool, logger *slog.Logger) *IMAPReceiver {
 	if folder == "" {
 		folder = "INBOX"
 	}
@@ -44,6 +45,7 @@ func NewIMAP(name, host string, port int, username, password string, useTLS bool
 		useTLS:       useTLS,
 		folder:       folder,
 		pollInterval: pollInterval,
+		useIdle:      useIdle,
 		logger:       logger,
 	}
 }
@@ -108,10 +110,13 @@ func (r *IMAPReceiver) runSession(ctx context.Context, getSeenIDs func() map[str
 	defer r.logout(client)
 
 	caps := client.Caps()
-	if caps.Has(imap.CapIdle) {
+	idleEnabled := r.useIdle && caps.Has(imap.CapIdle)
+	if idleEnabled {
 		r.logger.Info("using IMAP IDLE", "account", r.name)
-	} else {
+	} else if !caps.Has(imap.CapIdle) {
 		r.logger.Info("using polling", "account", r.name, "interval", r.pollInterval)
+	} else {
+		r.logger.Info("using polling (IDLE disabled)", "account", r.name, "interval", r.pollInterval)
 	}
 
 	if _, err := client.Select(r.folder, nil).Wait(); err != nil {
@@ -121,7 +126,7 @@ func (r *IMAPReceiver) runSession(ctx context.Context, getSeenIDs func() map[str
 	// Initial fetch on connect.
 	r.deliverNew(client, getSeenIDs(), processDays, onNew)
 
-	if caps.Has(imap.CapIdle) {
+	if idleEnabled {
 		return r.idleLoop(ctx, client, notify, getSeenIDs, processDays, onNew)
 	}
 	r.pollLoop(ctx, getSeenIDs, processDays, onNew)

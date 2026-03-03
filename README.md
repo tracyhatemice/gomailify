@@ -102,6 +102,7 @@ accounts:
     check_interval_seconds: 60
     process_days: 14
     imap_folder: INBOX
+    use_idle: true   # set to false to force polling even if server supports IDLE
 ```
 
 ### Account fields
@@ -118,7 +119,8 @@ accounts:
 | `forward_to` | yes | — | Destination email address |
 | `check_interval_seconds` | no | `60` | Polling interval |
 | `process_days` | no | `7` | Only process emails from the last N days |
-| `imap_folder` | no | `INBOX` | IMAP folder to monitor |
+| `imap_folder` | no | `INBOX` | IMAP folder to monitor (IMAP only) |
+| `use_idle` | no | `true` | Use IMAP IDLE for push delivery; set `false` to force polling (IMAP only) |
 
 ## CLI Flags
 
