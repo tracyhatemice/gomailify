@@ -121,6 +121,12 @@ func (r *IMAPReceiver) runSession(ctx context.Context, getSeenIDs func() map[str
 		client.Close()
 	}()
 
+	if client.Caps().Has(imap.CapIdle) {
+		r.logger.Info("using IMAP IDLE", "account", r.name)
+	} else {
+		r.logger.Info("using polling", "account", r.name, "interval", r.pollInterval)
+	}
+
 	if _, err := client.Select(r.folder, nil).Wait(); err != nil {
 		return fmt.Errorf("imap select %s: %w", r.folder, err)
 	}
@@ -129,11 +135,8 @@ func (r *IMAPReceiver) runSession(ctx context.Context, getSeenIDs func() map[str
 	r.deliverNew(client, getSeenIDs(), processDays, onNew)
 
 	if client.Caps().Has(imap.CapIdle) {
-		r.logger.Info("using IMAP IDLE", "account", r.name)
 		return r.runIDLELoop(ctx, client, notify, getSeenIDs, processDays, onNew)
 	}
-
-	r.logger.Info("using polling", "account", r.name, "interval", r.pollInterval)
 	return r.runPollingLoop(ctx, client, getSeenIDs, processDays, onNew)
 }
 
