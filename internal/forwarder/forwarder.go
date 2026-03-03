@@ -51,7 +51,6 @@ func (f *Forwarder) Run(ctx context.Context) {
 	)
 
 	if w, ok := f.receiver.(receiver.Watcher); ok {
-		f.logger.Info("using IMAP IDLE", "account", f.account.Name)
 		w.Watch(ctx, f.tracker.SeenIDs, f.account.GetProcessDays(), func(emails []receiver.Email) {
 			f.forwardEmails(emails)
 		})

@@ -89,13 +89,13 @@ func newReceiver(acct config.Account, logger *slog.Logger) (receiver.Receiver, e
 	switch acct.Protocol {
 	case "pop3":
 		return receiver.NewPOP3(
-			acct.Host, acct.Port,
+			acct.Name, acct.Host, acct.Port,
 			acct.Username, acct.Password,
 			acct.UseTLS, logger,
 		), nil
 	case "imap":
 		return receiver.NewIMAP(
-			acct.Host, acct.Port,
+			acct.Name, acct.Host, acct.Port,
 			acct.Username, acct.Password,
 			acct.UseTLS, acct.GetIMAPFolder(), acct.CheckInterval(), logger,
 		), nil

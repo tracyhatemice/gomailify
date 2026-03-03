@@ -19,6 +19,7 @@ const (
 
 // IMAPReceiver fetches emails over IMAP/IMAPS and implements Watcher via IDLE.
 type IMAPReceiver struct {
+	name         string
 	host         string
 	port         int
 	username     string
@@ -30,11 +31,12 @@ type IMAPReceiver struct {
 }
 
 // NewIMAP creates a new IMAP receiver.
-func NewIMAP(host string, port int, username, password string, useTLS bool, folder string, pollInterval time.Duration, logger *slog.Logger) *IMAPReceiver {
+func NewIMAP(name, host string, port int, username, password string, useTLS bool, folder string, pollInterval time.Duration, logger *slog.Logger) *IMAPReceiver {
 	if folder == "" {
 		folder = "INBOX"
 	}
 	return &IMAPReceiver{
+		name:         name,
 		host:         host,
 		port:         port,
 		username:     username,
@@ -68,12 +70,13 @@ func (r *IMAPReceiver) Fetch(seenIDs map[string]struct{}, processDays int) ([]Em
 func (r *IMAPReceiver) Watch(ctx context.Context, getSeenIDs func() map[string]struct{}, processDays int, onNew func([]Email)) {
 	backoffDur := imapInitialBackoff
 	for {
-		r.logger.Info("imap connecting", "account", r.username)
+		r.logger.Debug("imap connecting", "account", r.name)
 		err := r.runSession(ctx, getSeenIDs, processDays, onNew)
 		if ctx.Err() != nil {
 			return
 		}
 		r.logger.Error("imap session ended, reconnecting",
+			"account", r.name,
 			"error", err,
 			"backoff", backoffDur,
 		)
@@ -117,14 +120,11 @@ func (r *IMAPReceiver) runSession(ctx context.Context, getSeenIDs func() map[str
 	r.deliverNew(client, getSeenIDs(), processDays, onNew)
 
 	if client.Caps().Has(imap.CapIdle) {
-		r.logger.Info("IMAP IDLE supported", "account", r.username)
+		r.logger.Info("using IMAP IDLE", "account", r.name)
 		return r.runIDLELoop(ctx, client, notify, getSeenIDs, processDays, onNew)
 	}
 
-	r.logger.Warn("IMAP IDLE not supported, using polling on persistent connection",
-		"account", r.username,
-		"interval", r.pollInterval,
-	)
+	r.logger.Info("using polling", "account", r.name, "interval", r.pollInterval)
 	return r.runPollingLoop(ctx, client, getSeenIDs, processDays, onNew)
 }
 
@@ -182,7 +182,7 @@ func (r *IMAPReceiver) runPollingLoop(ctx context.Context, client *imapclient.Cl
 func (r *IMAPReceiver) deliverNew(client *imapclient.Client, seenIDs map[string]struct{}, processDays int, onNew func([]Email)) {
 	emails, err := r.fetchMessages(client, seenIDs, processDays)
 	if err != nil {
-		r.logger.Error("imap fetch failed", "error", err)
+		r.logger.Error("imap fetch failed", "account", r.name, "error", err)
 		return
 	}
 	if len(emails) > 0 {
@@ -200,10 +200,10 @@ func (r *IMAPReceiver) fetchMessages(client *imapclient.Client, seenIDs map[stri
 
 	seqNums := searchData.AllSeqNums()
 	if len(seqNums) == 0 {
-		r.logger.Debug("no messages found in date range")
+		r.logger.Debug("no messages found in date range", "account", r.name)
 		return nil, nil
 	}
-	r.logger.Info("found messages in date range", "count", len(seqNums))
+	r.logger.Info("found messages in date range", "account", r.name, "count", len(seqNums))
 
 	fetchOpts := &imap.FetchOptions{
 		Envelope:    true,
@@ -230,7 +230,7 @@ func (r *IMAPReceiver) fetchMessages(client *imapclient.Client, seenIDs map[stri
 
 		content := buf.FindBodySection(bodySection)
 		if len(content) == 0 {
-			r.logger.Warn("empty body, skipping", "msg_id", msgID)
+			r.logger.Warn("empty body, skipping", "account", r.name, "msg_id", msgID)
 			continue
 		}
 
@@ -241,7 +241,7 @@ func (r *IMAPReceiver) fetchMessages(client *imapclient.Client, seenIDs map[stri
 		emails = append(emails, Email{ID: msgID, Date: date, Content: content})
 	}
 
-	r.logger.Info("filtered emails", "new", len(emails))
+	r.logger.Info("filtered emails", "account", r.name, "new", len(emails))
 	return emails, nil
 }
 
